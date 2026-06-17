@@ -1,0 +1,20 @@
+# SOPS creation rules for this project.
+# All files matching environments/**/*.yaml are encrypted with age.
+#
+# Setup (once, on the VM):
+#   1. Generate an age key pair:
+#        age-keygen -o ~/.config/sops/age/key.txt
+#      The public key is printed to stdout (starts with "age1...").
+#   2. Replace the placeholder below with your actual public key.
+#   3. Export the key file path before running helm secrets:
+#        export SOPS_AGE_KEY_FILE=~/.config/sops/age/key.txt
+#
+# Encrypt:
+#   sops --encrypt --in-place environments/dev/secrets.yaml
+#
+# Decrypt (for inspection only — helm-secrets handles this automatically at install):
+#   sops --decrypt environments/dev/secrets.yaml
+
+creation_rules:
+  - path_regex: environments/.*\.ya?ml$
+    age: age1CHANGEME_REPLACE_WITH_YOUR_AGE_PUBLIC_KEY

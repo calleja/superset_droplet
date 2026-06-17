@@ -1,0 +1,219 @@
+# Apache Superset Helm overrides — resource-constrained droplet (2 vCPU / 4 GiB class)
+# Chart: superset/superset 0.15.x, app 5.0.0
+#
+# This file is a sibling to my-values.yaml for small VPS / single-node installs.
+# Replace CHANGEME_* placeholders before install. Do not commit real secrets.
+#
+# Install:
+#   helm repo add superset https://apache.github.io/superset && helm repo update
+#   kubectl create namespace superset --dry-run=client -o yaml | kubectl apply -f -
+#   helm upgrade --install superset superset/superset --version 0.15.2 -n superset \
+#     --create-namespace -f custom_config/my-values_droplet.yaml
+#
+# UI (ClusterIP):
+#   kubectl port-forward -n superset svc/superset 8088:8088
+#
+# --- Envelopes (from plan) ---
+# This file uses **Suggested (B)** limits for chart-managed Postgres + Redis on one small node.
+# For **Minimal (A)**, lower: web limit to ~768Mi, worker to ~512Mi, postgres limit to ~512Mi,
+# redis limit to ~192Mi, init Job limit to ~1Gi; optionally SERVER_THREADS_AMOUNT: "4".
+
+image:
+  tag: "5.0.0"
+
+postgresql:
+  enabled: true
+  image:
+    registry: docker.io
+    repository: bitnamilegacy/postgresql
+    tag: "14.17.0-debian-12-r3"
+  auth:
+    username: superset
+    password: superset
+    database: superset
+  primary:
+    resources:
+      limits:
+        cpu: 500m
+        memory: 768Mi
+      requests:
+        cpu: 150m
+        memory: 384Mi
+    extendedConfiguration: |
+      shared_buffers = 64MB
+      effective_cache_size = 192MB
+      work_mem = 4MB
+      maintenance_work_mem = 32MB
+      max_connections = 50
+
+supersetNode:
+  replicas:
+    enabled: true
+    replicaCount: 1
+  connections:
+    db_type: postgresql
+    db_host: "{{ .Release.Name }}-postgresql"
+    db_port: "5432"
+    db_user: superset
+    db_pass: superset
+    db_name: superset
+  command:
+    - "/bin/sh"
+    - "-c"
+    - ". {{ .Values.configMountPath }}/superset_bootstrap.sh; /usr/bin/run-server.sh"
+  initContainers:
+    - name: wait-for-postgres
+      image: "{{ .Values.initImage.repository }}:{{ .Values.initImage.tag }}"
+      imagePullPolicy: "{{ .Values.initImage.pullPolicy }}"
+      envFrom:
+        - secretRef:
+            name: "{{ tpl .Values.envFromSecret . }}"
+      command:
+        - /bin/sh
+        - -c
+        - dockerize -wait "tcp://$DB_HOST:$DB_PORT" -timeout 120s
+      resources:
+        limits:
+          memory: 128Mi
+        requests:
+          cpu: 50m
+          memory: 64Mi
+  resources:
+    limits:
+      cpu: "1"
+      memory: 1280Mi
+    requests:
+      cpu: 300m
+      memory: 512Mi
+
+supersetWorker:
+  replicas:
+    enabled: true
+    replicaCount: 1
+  command:
+    - "/bin/sh"
+    - "-c"
+    - ". {{ .Values.configMountPath }}/superset_bootstrap.sh; celery --app=superset.tasks.celery_app:app worker --concurrency 1"
+  initContainers:
+    - name: wait-for-postgres-redis
+      image: "{{ .Values.initImage.repository }}:{{ .Values.initImage.tag }}"
+      imagePullPolicy: "{{ .Values.initImage.pullPolicy }}"
+      envFrom:
+        - secretRef:
+            name: "{{ tpl .Values.envFromSecret . }}"
+      command:
+        - /bin/sh
+        - -c
+        - dockerize -wait "tcp://$DB_HOST:$DB_PORT" -wait "tcp://$REDIS_HOST:$REDIS_PORT" -timeout 120s
+      resources:
+        limits:
+          memory: 128Mi
+        requests:
+          cpu: 50m
+          memory: 64Mi
+  resources:
+    limits:
+      cpu: 500m
+      memory: 768Mi
+    requests:
+      cpu: 150m
+      memory: 384Mi
+
+redis:
+  enabled: true
+  image:
+    registry: docker.io
+    repository: bitnamilegacy/redis
+    tag: "7.0.10-debian-11-r4"
+  master:
+    extraFlags:
+      - "--maxmemory"
+      - "256mb"
+      - "--maxmemory-policy"
+      - "allkeys-lru"
+    resources:
+      limits:
+        cpu: 200m
+        memory: 256Mi
+      requests:
+        cpu: 100m
+        memory: 192Mi
+
+service:
+  type: ClusterIP
+  port: 8088
+
+bootstrapScript: |
+  set -e
+  uv pip install --no-cache-dir \
+    "mysql-connector-python>=8.0.0,<9.0.0" \
+    "psycopg2-binary" \
+    "pymysql"
+  if [ ! -f ~/bootstrap ]; then echo "Running Superset with uid {{ .Values.runAsUser }}" > ~/bootstrap; fi
+
+# Gunicorn: 1 worker, fewer threads than image default (20) to save RAM on small nodes.
+# Source MySQL: set host to your droplet’s MySQL IP/hostname or a managed DB endpoint.
+extraEnv:
+  SERVER_WORKER_AMOUNT: "1"
+  SERVER_THREADS_AMOUNT: "8"
+  SOURCE_MYSQL_HOST: CHANGEME_MYSQL_HOST
+  SOURCE_MYSQL_PORT: "3306"
+  SOURCE_MYSQL_DATABASE: CHANGEME_DATABASE
+  SOURCE_MYSQL_USER: CHANGEME_USER
+
+extraSecretEnv:
+  SUPERSET_SECRET_KEY: "CHANGEME_use_openssl_rand_base64_42"
+  SOURCE_MYSQL_PASSWORD: "CHANGEME_MYSQL_PASSWORD"
+
+configOverrides:
+  pymysql_as_mysqldb: |
+    # db_engine_specs/mysql.py imports MySQLdb for result typing; image has no mysqlclient.
+    try:
+      import pymysql
+      pymysql.install_as_MySQLdb()
+    except Exception:
+      pass
+  secret: |
+    SECRET_KEY = os.environ["SUPERSET_SECRET_KEY"]
+  source_mysql_uri_hint: |
+    # Optional: paste into Superset UI when adding the source DB:
+    # mysql+mysqlconnector://{os.environ["SOURCE_MYSQL_USER"]}:{os.environ["SOURCE_MYSQL_PASSWORD"]}@{os.environ["SOURCE_MYSQL_HOST"]}:{os.environ["SOURCE_MYSQL_PORT"]}/{os.environ["SOURCE_MYSQL_DATABASE"]}
+
+init:
+  enabled: true
+  loadExamples: false
+  createAdmin: true
+  resources:
+    limits:
+      cpu: "1"
+      memory: 1536Mi
+    requests:
+      cpu: 100m
+      memory: 256Mi
+  initContainers:
+    - name: wait-for-postgres
+      image: "{{ .Values.initImage.repository }}:{{ .Values.initImage.tag }}"
+      imagePullPolicy: "{{ .Values.initImage.pullPolicy }}"
+      envFrom:
+        - secretRef:
+            name: "{{ tpl .Values.envFromSecret . }}"
+      command:
+        - /bin/sh
+        - -c
+        - dockerize -wait "tcp://$DB_HOST:$DB_PORT" -timeout 120s
+      resources:
+        limits:
+          memory: 128Mi
+        requests:
+          cpu: 50m
+          memory: 64Mi
+
+# Optional components — keep off on small droplets unless you need them.
+supersetCeleryBeat:
+  enabled: false
+
+supersetCeleryFlower:
+  enabled: false
+
+supersetWebsockets:
+  enabled: false
