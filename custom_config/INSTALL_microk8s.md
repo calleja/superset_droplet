@@ -10,7 +10,7 @@ Target environment: DigitalOcean VM, 2 vCPU / 4 GiB, MicroK8s v1.35.0, helm v4.1
 # Confirm MicroK8s is running
 microk8s status --wait-ready
 
-# Enable required addons (if not already)
+# Enable required addons (if not already); deprecated, must now use hostpath-storage - apparently not suitable for production environments
 microk8s enable dns storage
 
 # Confirm helm
@@ -129,6 +129,8 @@ microk8s kubectl cluster-info dump | grep -i cidr
 ```sh
 ip addr show | grep 'inet ' | grep -v 127
 # DigitalOcean droplets: private IP is typically 10.x.x.x
+# private IP: 10.116.0.2
+# public IPv4: 67.207.80.236
 ```
 
 Update `my-values.yaml` — replace `CHANGEME_VM_PRIVATE_IP` with this IP:
