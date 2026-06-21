@@ -218,10 +218,10 @@ bootstrapScript: |
 extraEnv:
   SERVER_WORKER_AMOUNT: "1"
   SERVER_THREADS_AMOUNT: "8"
-  SOURCE_MYSQL_HOST: "CHANGEME_VM_PRIVATE_IP"   # e.g. 10.114.0.2 — see README.md
+  SOURCE_MYSQL_HOST: "10.116.0.2"   # e.g. 10.114.0.2 — see README.md
   SOURCE_MYSQL_PORT: "3306"
   SOURCE_MYSQL_DATABASE: "membership_ard"
-  SOURCE_MYSQL_USER: "CHANGEME_MYSQL_USER"
+  SOURCE_MYSQL_USER: "lcalleja2"
 
 # extraSecretEnv is intentionally absent here.
 # SUPERSET_SECRET_KEY and SOURCE_MYSQL_PASSWORD are injected at install time

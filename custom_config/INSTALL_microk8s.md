@@ -148,6 +148,7 @@ mysql -u root -p
 SELECT user, host FROM mysql.user WHERE user = 'your_superset_user';
 -- If the host column is '127.0.0.1' or 'localhost', grant access from the pod CIDR:
 GRANT ALL PRIVILEGES ON membership_ard.* TO 'your_user'@'10.1.%' IDENTIFIED BY 'password';
+GRANT SELECT ON membership_ard.* TO 'superset'@'localhost' IDENTIFIED BY 'password';
 FLUSH PRIVILEGES;
 ```
 
