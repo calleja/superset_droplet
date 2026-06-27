@@ -138,7 +138,7 @@ The following values must be discovered on the actual DigitalOcean VM before the
 
 ```yaml
 extraEnv:
-  SOURCE_MYSQL_HOST: "10.114.0.2"   # replace with your VM's actual private IP
+  SOURCE_MYSQL_HOST: "10.114.0.2"   # replace with your VM's actual private IP; done on the prod version
   SOURCE_MYSQL_PORT: "3306"
   SOURCE_MYSQL_DATABASE: "membership_ard"
   SOURCE_MYSQL_USER: "your_mysql_user"

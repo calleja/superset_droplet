@@ -220,8 +220,8 @@ extraEnv:
   SERVER_THREADS_AMOUNT: "8"
   SOURCE_MYSQL_HOST: "10.116.0.2"   # e.g. 10.114.0.2 — see README.md
   SOURCE_MYSQL_PORT: "3306"
-  SOURCE_MYSQL_DATABASE: "membership_ard"
-  SOURCE_MYSQL_USER: "lcalleja2"
+  SOURCE_MYSQL_DATABASE: "membership_ard"  # can this be moved to SOPS
+  SOURCE_MYSQL_USER: "superset"
 
 # extraSecretEnv is intentionally absent here.
 # SUPERSET_SECRET_KEY and SOURCE_MYSQL_PASSWORD are injected at install time
@@ -241,7 +241,7 @@ configOverrides:
     except Exception:
       pass
   secret: |
-    SECRET_KEY = os.environ["SUPERSET_SECRET_KEY"]
+    SECRET_KEY = os.environ["SUPERSET_SECRET_KEY"] 
   source_mysql_uri_hint: |
     # SQLAlchemy URI template — paste this into the Superset UI (Settings > Databases > + Database):
     # mysql+mysqlconnector://{SOURCE_MYSQL_USER}:{SOURCE_MYSQL_PASSWORD}@{SOURCE_MYSQL_HOST}:{SOURCE_MYSQL_PORT}/{SOURCE_MYSQL_DATABASE}
