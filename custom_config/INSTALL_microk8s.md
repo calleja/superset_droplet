@@ -46,6 +46,11 @@ age-keygen -o ~/.config/sops/age/key.txt
 Copy the public key line (starts with `age1...`) and paste it into
 `custom_config/.sops.yaml`, replacing the `age1CHANGEME_...` placeholder.
 
+The `.sops.yaml` rule targets `environments/.*/secrets\.yaml$` only, so the
+`secrets.example.yaml` template is never accidentally encrypted. The entire
+`secrets.yaml` is encrypted (no `encrypted_regex` partial selection) — SOPS
+wraps every value into an `ENC[AES256_GCM,...]` block.
+
 ```sh
 export SOPS_AGE_KEY_FILE=~/.config/sops/age/key.txt
 # Add to ~/.bashrc or ~/.zshrc so it persists across sessions.
@@ -67,8 +72,13 @@ Edit `environments/dev/secrets.yaml` — fill in real values:
 ```yaml
 extraSecretEnv:
   SUPERSET_SECRET_KEY: "paste_output_of_openssl_rand_base64_42"
+  SOURCE_MYSQL_USER: "your_mysql_username"
   SOURCE_MYSQL_PASSWORD: "your_mysql_password"
 ```
+
+`SOURCE_MYSQL_USER` is now a secret (K8s Secret, not ConfigMap) so it is never
+visible in plaintext inside the cluster. `SOURCE_MYSQL_HOST`, `SOURCE_MYSQL_PORT`,
+and `SOURCE_MYSQL_DATABASE` remain non-sensitive in `my-values.yaml`.
 
 Generate a strong secret key:
 
@@ -79,6 +89,7 @@ openssl rand -base64 42
 Encrypt the file in place:
 
 ```sh
+# --in-place means overwrite the mentioned file
 sops --encrypt --in-place environments/dev/secrets.yaml
 ```
 
@@ -183,7 +194,7 @@ microk8s helm secrets upgrade --install superset superset/superset \
   --create-namespace \
   -f custom_config/my-values.yaml \
   -f custom_config/environments/dev/secrets.yaml \
-  --wait --timeout 15m
+  --wait --timeout 15m 
 ```
 
 `helm-secrets` will decrypt `secrets.yaml` to a temp file, merge it as a

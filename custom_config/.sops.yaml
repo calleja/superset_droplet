@@ -1,5 +1,6 @@
 # SOPS creation rules for this project.
-# All files matching environments/**/*.yaml are encrypted with age.
+# Only environments/*/secrets.yaml files are encrypted (not *.example.yaml templates).
+# The entire secrets file is encrypted — no encrypted_regex partial matching needed.
 #
 # Setup (once, on the VM):
 #   1. Generate an age key pair:
@@ -16,5 +17,5 @@
 #   sops --decrypt environments/dev/secrets.yaml
 
 creation_rules:
-  - path_regex: environments/.*\.ya?ml$
+  - path_regex: environments/.*/secrets\.yaml$
     age: age1CHANGEME_REPLACE_WITH_YOUR_AGE_PUBLIC_KEY

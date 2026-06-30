@@ -70,9 +70,11 @@ The Superset 5.0.0 Docker image does not ship all required Python drivers in its
 
 ### 6. Secrets are managed with SOPS + age + helm-secrets
 
-Sensitive values (`SUPERSET_SECRET_KEY`, `SOURCE_MYSQL_PASSWORD`) are not stored in `my-values.yaml`. They live in `environments/dev/secrets.yaml`, which is encrypted with [SOPS](https://github.com/getsops/sops) using an [age](https://github.com/FiloSottile/age) key stored only on the VM.
+Sensitive values (`SUPERSET_SECRET_KEY`, `SOURCE_MYSQL_USER`, `SOURCE_MYSQL_PASSWORD`) are not stored in `my-values.yaml`. They live in `environments/dev/secrets.yaml`, which is encrypted with [SOPS](https://github.com/getsops/sops) using an [age](https://github.com/FiloSottile/age) key stored only on the VM.
 
 The [helm-secrets](https://github.com/jkroepke/helm-secrets) plugin decrypts the file transparently at install time and passes it as a second `-f` layer.
+
+`.sops.yaml` targets `environments/.*/secrets\.yaml$` (not `*.example.yaml`) and encrypts the whole file — no `encrypted_regex` partial selection. All three secrets are injected under `extraSecretEnv`, which the chart renders as a Kubernetes Secret (never a ConfigMap). Only `SOURCE_MYSQL_HOST`, `SOURCE_MYSQL_PORT`, and `SOURCE_MYSQL_DATABASE` remain in `my-values.yaml` as plaintext `extraEnv`.
 
 ### 7. Resource sizing: "Suggested (B)" envelope
 
@@ -141,7 +143,8 @@ extraEnv:
   SOURCE_MYSQL_HOST: "10.114.0.2"   # replace with your VM's actual private IP; done on the prod version
   SOURCE_MYSQL_PORT: "3306"
   SOURCE_MYSQL_DATABASE: "membership_ard"
-  SOURCE_MYSQL_USER: "your_mysql_user"
+# NOTE: SOURCE_MYSQL_USER is now in environments/dev/secrets.yaml (extraSecretEnv),
+# not here. It is a Kubernetes Secret, not a ConfigMap entry.
 ```
 
 **b. MySQL bind-address (`/etc/mysql/mysql.conf.d/mysqld.cnf`):**
@@ -202,7 +205,7 @@ age-keygen -o ~/.config/sops/age/key.txt
 
 # 2. Create and encrypt secrets
 cp environments/dev/secrets.example.yaml environments/dev/secrets.yaml
-# fill in SUPERSET_SECRET_KEY and SOURCE_MYSQL_PASSWORD
+# fill in SUPERSET_SECRET_KEY, SOURCE_MYSQL_USER, and SOURCE_MYSQL_PASSWORD
 sops --encrypt --in-place environments/dev/secrets.yaml
 
 # 3. Install helm-secrets plugin (once)
