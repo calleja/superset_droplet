@@ -18,4 +18,4 @@
 
 creation_rules:
   - path_regex: environments/.*/secrets\.yaml$
-    age: age1CHANGEME_REPLACE_WITH_YOUR_AGE_PUBLIC_KEY
+    age: age17jjclxv3fnr6m509ppar2zv9s5vq4tlh3fmpaqsdp90zssgq7y9q8mm4uz
