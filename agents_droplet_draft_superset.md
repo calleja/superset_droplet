@@ -12,7 +12,7 @@
 - **Tech Stack:** 
   - digitalOcean virtual machine of size: 2 vCPU / 4 GiB VM
   - mysql 8.0.45-0ubuntu0.22.04.1: installed on the VM (not in a pod or container) 
-  - Apache Superset 5.0.0
+  - Apache Superset 6.1.0 (Helm chart 0.17.2, latest published)
   - helm v4.1.4
   - MicroK8s v1.35.0 revision 8612
 - **File Structure:**
@@ -67,7 +67,7 @@ my-chart/
 MicroK8s & server reachability: Host MySQL reachability — the main real migration task. MicroK8s pods use a CNI network; 127.0.0.1 inside a pod is not the VM’s MySQL. Same problem INSTALL_droplet already calls out for any non-Minikube cluster.
 MySQL bind address — ensure MySQL listens on an interface pods can hit (0.0.0.0 or the node IP), not only 127.0.0.1, if you use the LAN IP approach.
 
-The `psycopg2-binary` package is required because the Superset 5.0.0 image does not bundle a PostgreSQL Python driver in its venv, but the app uses `postgresql+psycopg2://` by default for the metadata DB SQLAlchemy URI. Made decision here to include the driver in the bootstrapScript.
+The `psycopg2-binary` package is required because the Superset 6.1.0 image does not bundle a PostgreSQL Python driver in its venv, but the app uses `postgresql+psycopg2://` by default for the metadata DB SQLAlchemy URI. Made decision here to include the driver in the bootstrapScript.
 
 **MySQL charts and `MySQLdb`:** Superset’s MySQL engine spec still does `import MySQLdb` in some paths (e.g. chart queries). The image does not ship `mysqlclient`. Install `pymysql` in bootstrap and register it in `configOverrides` so `MySQLdb` resolves:
 

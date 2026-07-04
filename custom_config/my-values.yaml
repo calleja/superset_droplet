@@ -1,6 +1,11 @@
 # Apache Superset Helm overrides — MicroK8s, resource-constrained droplet (2 vCPU / 4 GiB)
-# Chart: superset/superset 0.15.4, app 5.0.0
+# Chart: superset/superset 0.17.2, app 6.1.0  (latest published; 0.19.0 is not in the repo index)
 # Subcharts: bitnami postgresql 16.7.27 (image tag 14.17.0), redis 17.9.4 (image tag 7.0.10)
+#
+# Chart 0.16.0+ removed the `initImage` value; init containers now run on the main
+# Superset image and wait via a bash /dev/tcp loop (no dockerize binary). The custom
+# initContainers below follow that pattern while keeping the tight resource limits
+# required on this constrained VM.
 #
 # Secrets are NOT stored here. They are managed via SOPS + age.
 # See environments/dev/secrets.example.yaml and INSTALL_microk8s.md.
@@ -10,7 +15,7 @@
 #   microk8s helm repo update
 #   microk8s kubectl create namespace superset --dry-run=client -o yaml | microk8s kubectl apply -f -
 #   microk8s helm secrets upgrade --install superset superset/superset \
-#     --version 0.15.4 -n superset --create-namespace \
+#     --version 0.17.2 -n superset --create-namespace \
 #     -f custom_config/my-values.yaml \
 #     -f custom_config/environments/dev/secrets.yaml \
 #     --wait --timeout 15m
@@ -19,7 +24,7 @@
 #   microk8s kubectl port-forward -n superset svc/superset 8088:8088
 
 image:
-  tag: "5.0.0"
+  tag: "6.1.0"
 
 # ---------------------------------------------------------------------------
 # Metadata DB: PostgreSQL (chart-managed)
@@ -94,15 +99,25 @@ supersetNode:
     - ". {{ .Values.configMountPath }}/superset_bootstrap.sh; /usr/bin/run-server.sh"
   initContainers:
     - name: wait-for-postgres
-      image: "{{ .Values.initImage.repository }}:{{ .Values.initImage.tag }}"
-      imagePullPolicy: "{{ .Values.initImage.pullPolicy }}"
+      image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+      imagePullPolicy: "{{ .Values.image.pullPolicy }}"
       envFrom:
         - secretRef:
             name: "{{ tpl .Values.envFromSecret . }}"
       command:
-        - /bin/sh
+        - /bin/bash
         - -c
-        - dockerize -wait "tcp://$DB_HOST:$DB_PORT" -timeout 120s
+        - |
+          SECONDS=0
+          until (exec 3<>/dev/tcp/"$DB_HOST"/"$DB_PORT") 2>/dev/null; do
+            if [ "$SECONDS" -ge 120 ]; then
+              echo "timeout waiting for postgres at $DB_HOST:$DB_PORT after 120s" >&2
+              exit 1
+            fi
+            echo "waiting for postgres at $DB_HOST:$DB_PORT (elapsed ${SECONDS}s)"
+            sleep 2
+          done
+          echo "postgres at $DB_HOST:$DB_PORT is up"
       resources:
         limits:
           memory: 128Mi
@@ -130,15 +145,30 @@ supersetWorker:
     - ". {{ .Values.configMountPath }}/superset_bootstrap.sh; celery --app=superset.tasks.celery_app:app worker --concurrency 1"
   initContainers:
     - name: wait-for-postgres-redis
-      image: "{{ .Values.initImage.repository }}:{{ .Values.initImage.tag }}"
-      imagePullPolicy: "{{ .Values.initImage.pullPolicy }}"
+      image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+      imagePullPolicy: "{{ .Values.image.pullPolicy }}"
       envFrom:
         - secretRef:
             name: "{{ tpl .Values.envFromSecret . }}"
       command:
-        - /bin/sh
+        - /bin/bash
         - -c
-        - dockerize -wait "tcp://$DB_HOST:$DB_PORT" -wait "tcp://$REDIS_HOST:$REDIS_PORT" -timeout 120s
+        - |
+          SECONDS=0
+          wait_for() {
+            local host=$1 port=$2 name=$3
+            until (exec 3<>/dev/tcp/"$host"/"$port") 2>/dev/null; do
+              if [ "$SECONDS" -ge 120 ]; then
+                echo "timeout waiting for $name at $host:$port after 120s" >&2
+                exit 1
+              fi
+              echo "waiting for $name at $host:$port (elapsed ${SECONDS}s)"
+              sleep 2
+            done
+            echo "$name at $host:$port is up"
+          }
+          wait_for "$DB_HOST" "$DB_PORT" postgres
+          wait_for "$REDIS_HOST" "$REDIS_PORT" redis
       resources:
         limits:
           memory: 128Mi
@@ -169,15 +199,25 @@ init:
       memory: 256Mi
   initContainers:
     - name: wait-for-postgres
-      image: "{{ .Values.initImage.repository }}:{{ .Values.initImage.tag }}"
-      imagePullPolicy: "{{ .Values.initImage.pullPolicy }}"
+      image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+      imagePullPolicy: "{{ .Values.image.pullPolicy }}"
       envFrom:
         - secretRef:
             name: "{{ tpl .Values.envFromSecret . }}"
       command:
-        - /bin/sh
+        - /bin/bash
         - -c
-        - dockerize -wait "tcp://$DB_HOST:$DB_PORT" -timeout 120s
+        - |
+          SECONDS=0
+          until (exec 3<>/dev/tcp/"$DB_HOST"/"$DB_PORT") 2>/dev/null; do
+            if [ "$SECONDS" -ge 120 ]; then
+              echo "timeout waiting for postgres at $DB_HOST:$DB_PORT after 120s" >&2
+              exit 1
+            fi
+            echo "waiting for postgres at $DB_HOST:$DB_PORT (elapsed ${SECONDS}s)"
+            sleep 2
+          done
+          echo "postgres at $DB_HOST:$DB_PORT is up"
       resources:
         limits:
           memory: 128Mi
@@ -193,7 +233,7 @@ service:
   port: 8088
 
 # ---------------------------------------------------------------------------
-# Bootstrap: install Python drivers absent from the Superset 5.0.0 image venv.
+# Bootstrap: install Python drivers absent from the Superset 6.1.0 image venv.
 #   - psycopg2-binary: metadata DB (postgresql+psycopg2:// SQLAlchemy URI)
 #   - mysql-connector-python: source DB connections via mysql+mysqlconnector://
 #   - pymysql: shim for engine spec paths that still `import MySQLdb`

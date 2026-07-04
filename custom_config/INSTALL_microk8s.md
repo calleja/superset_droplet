@@ -189,7 +189,7 @@ Run from the project root (parent of `custom_config/`):
 
 ```sh
 microk8s helm secrets upgrade --install superset superset/superset \
-  --version 0.15.4 \
+  --version 0.17.2 \
   -n superset \
   --create-namespace \
   -f custom_config/my-values.yaml \
@@ -201,6 +201,14 @@ microk8s helm secrets upgrade --install superset superset/superset \
 second `-f` layer on top of `my-values.yaml`, and remove the temp file after.
 
 ### Alternative: install from local vendored chart
+
+> ⚠️ **Version mismatch:** the vendored chart in `superset-master/helm/superset`
+> is `0.15.4` (app `5.0.0`). These values target chart `0.17.2` (app `6.1.0`, the
+> latest published in the Helm repo — `0.19.0` is not in the repo index) and rely on
+> 0.16.0+ behavior (no `initImage`; init containers run on the main image and wait via
+> a bash `/dev/tcp` loop). To install from a local chart at `0.17.2`, first re-vendor
+> it: `helm pull superset/superset --version 0.17.2 --untar`.
+> Otherwise prefer the remote-repo install above.
 
 If the Helm repo is unavailable or you want to use the vendored chart:
 
@@ -256,7 +264,7 @@ microk8s kubectl top pod -n superset
 Common failure modes:
 - `ImagePullBackOff` on postgres/redis → confirm `bitnamilegacy/*` repository in `my-values.yaml`.
 - `OOMKilled` on init job → raise `init.resources.limits.memory` to 2Gi temporarily.
-- Init job hangs on dockerize wait → MySQL is not reachable from the pod; recheck bind-address, ufw, and `SOURCE_MYSQL_HOST`.
+- Init containers hang on the `/dev/tcp` wait loop → Postgres/Redis (or, for the source, MySQL) is not reachable from the pod; recheck bind-address, ufw, and `SOURCE_MYSQL_HOST`. (Chart 0.16.0+ no longer uses the `dockerize` binary; these values wait with a bash `/dev/tcp` loop on the main image.)
 
 ---
 

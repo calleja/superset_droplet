@@ -1,6 +1,6 @@
 # Superset on MicroK8s — Configuration Reference
 
-This directory holds the Helm values and supporting configuration to deploy Apache Superset 5.0.0 on a MicroK8s cluster running on a DigitalOcean 2 vCPU / 4 GiB VM.
+This directory holds the Helm values and supporting configuration to deploy Apache Superset 6.1.0 (Helm chart 0.17.2, the latest published) on a MicroK8s cluster running on a DigitalOcean 2 vCPU / 4 GiB VM.
 
 ---
 
@@ -26,9 +26,13 @@ custom_config/
 
 The previous iteration (`my-values_droplet.yaml`) was built for Minikube. This iteration targets MicroK8s, which ships as a snap on Ubuntu and does not require a separate Docker runtime. The behavioral difference that matters most for this config is **host MySQL reachability** — see section below.
 
-### 2. Helm chart version pinned at 0.15.4
+### 2. Helm chart version pinned at 0.17.2
 
-The vendored chart in `superset-master/helm/superset/Chart.yaml` is `0.15.4`. Install and upgrade commands use `--version 0.15.4` to keep reproducible installs. The app image is pinned at `5.0.0`.
+Install and upgrade commands use `--version 0.17.2` to keep reproducible installs. The app image is pinned at `6.1.0`.
+
+> Note: `0.17.2` is the latest chart published to the Apache Superset Helm repo (`helm search repo superset/superset --versions`). `0.19.0` appears only in the project's GitHub `master` branch and is **not** available from the repo index, so `--version 0.19.0` fails to install. The vendored chart under `superset-master/helm/superset/Chart.yaml` is still `0.15.4`; re-vendor with `helm pull superset/superset --version 0.17.2 --untar` before using a local chart path.
+
+**Init containers changed in 0.16.0+.** The chart removed the top-level `initImage` value. Init containers now run on the main Superset image, and the chart's default wait step uses a bash `/dev/tcp` loop instead of the `dockerize` binary. The custom `initContainers:` blocks in `my-values.yaml` were migrated to this pattern (main image + `/dev/tcp` loop) while **keeping the tight per-init-container resource limits** (`limits.memory: 128Mi`, `requests: 50m cpu / 64Mi memory`) required on this resource-constrained VM. All pod-level resource limits are unchanged.
 
 ### 3. Bitnami image repository: bitnamilegacy
 
@@ -58,7 +62,7 @@ The source business data lives in the external MySQL database on the VM.
 
 ### 5. Python driver installation at bootstrap
 
-The Superset 5.0.0 Docker image does not ship all required Python drivers in its venv. Three are installed at pod startup via `bootstrapScript`:
+The Superset 6.1.0 Docker image does not ship all required Python drivers in its venv. Three are installed at pod startup via `bootstrapScript`:
 
 | Package | Purpose |
 |---|---|
@@ -214,7 +218,7 @@ microk8s helm plugin install https://github.com/jkroepke/helm-secrets
 # 4. Add Helm repo and install
 microk8s helm repo add superset https://apache.github.io/superset && microk8s helm repo update
 microk8s helm secrets upgrade --install superset superset/superset \
-  --version 0.15.4 -n superset --create-namespace \
+  --version 0.17.2 -n superset --create-namespace \
   -f custom_config/my-values.yaml \
   -f custom_config/environments/dev/secrets.yaml \
   --wait --timeout 15m
