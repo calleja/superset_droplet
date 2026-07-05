@@ -198,6 +198,48 @@ The `mysqlconnector` driver is installed by `bootstrapScript`. The `pymysql` shi
 
 ---
 
+## Public access
+
+The service is configured as `NodePort` on port `30088`. Caddy on the VM terminates
+HTTPS on port 443 and reverse-proxies to `127.0.0.1:30088`. Port `30088` is **not**
+opened in ufw or the DigitalOcean Cloud Firewall — it is loopback-only.
+
+```
+Browser (HTTPS :443) → Caddy → 127.0.0.1:30088 (NodePort) → Superset pod :8088
+```
+
+Key config in `my-values.yaml`:
+
+```yaml
+service:
+  type: NodePort
+  port: 8088
+  nodePort:
+    http: 30088
+
+configOverrides:
+  proxy_fix: |
+    ENABLE_PROXY_FIX = True
+    PREFERRED_URL_SCHEME = "https"
+    SESSION_COOKIE_SECURE = True
+    SESSION_COOKIE_HTTPONLY = True
+```
+
+Caddy (`/etc/caddy/Caddyfile`) on the droplet:
+
+```
+superset.yourdomain.com {
+    reverse_proxy 127.0.0.1:30088 { ... }
+}
+```
+
+See [INSTALL_microk8s.md](INSTALL_microk8s.md) section 7 for the full setup sequence:
+DNS A record → helm upgrade → Caddy install → firewall rules → end-to-end validation.
+
+An SSH tunnel remains available as a break-glass admin path without public exposure.
+
+---
+
 ## Install quick reference
 
 Full instructions in [INSTALL_microk8s.md](INSTALL_microk8s.md). Summary:
@@ -223,7 +265,11 @@ microk8s helm secrets upgrade --install superset superset/superset \
   -f custom_config/environments/dev/secrets.yaml \
   --wait --timeout 15m
 
-# 5. Access UI
-microk8s kubectl port-forward -n superset svc/superset 8088:8088
+# 5. Access UI — public HTTPS (after Caddy setup, see section 7 of INSTALL_microk8s.md)
+# https://superset.yourdomain.com/login/
+
+# 5b. Break-glass SSH tunnel
+ssh -L 8088:127.0.0.1:8088 USER@DROPLET_IP \
+  'microk8s kubectl port-forward -n superset svc/superset 8088:8088'
 # → open http://localhost:8088
 ```

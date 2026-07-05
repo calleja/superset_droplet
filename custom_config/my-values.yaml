@@ -20,8 +20,11 @@
 #     -f custom_config/environments/dev/secrets.yaml \
 #     --wait --timeout 15m
 #
-# UI (ClusterIP):
-#   microk8s kubectl port-forward -n superset svc/superset 8088:8088
+# UI (NodePort → Caddy HTTPS):
+#   https://superset.yourdomain.com/  (after Caddy setup — see INSTALL_microk8s.md section 7)
+# Break-glass SSH tunnel:
+#   ssh -L 8088:127.0.0.1:8088 USER@DROPLET_IP \
+#     'microk8s kubectl port-forward -n superset svc/superset 8088:8088'
 
 image:
   tag: "6.1.0"
@@ -228,9 +231,15 @@ init:
 # ---------------------------------------------------------------------------
 # Service
 # ---------------------------------------------------------------------------
+# NodePort exposes the UI on a high port on every node's IP (including
+# 127.0.0.1). Caddy on the VM terminates HTTPS on 443 and reverse-proxies
+# to 127.0.0.1:30088. Port 30088 must NOT be opened in ufw or the DO Cloud
+# Firewall — only Caddy needs it locally.
 service:
-  type: ClusterIP
+  type: NodePort
   port: 8088
+  nodePort:
+    http: 30088
 
 # ---------------------------------------------------------------------------
 # Bootstrap: install Python drivers absent from the Superset 6.1.0 image venv.
@@ -287,6 +296,14 @@ configOverrides:
   source_mysql_uri_hint: |
     # SQLAlchemy URI template — paste this into the Superset UI (Settings > Databases > + Database):
     # mysql+mysqlconnector://{SOURCE_MYSQL_USER}:{SOURCE_MYSQL_PASSWORD}@{SOURCE_MYSQL_HOST}:{SOURCE_MYSQL_PORT}/{SOURCE_MYSQL_DATABASE}
+  proxy_fix: |
+    # Required when Superset sits behind a reverse proxy (Caddy).
+    # Tells Flask/Superset to trust X-Forwarded-* headers so HTTPS links
+    # and redirect URIs are generated correctly.
+    ENABLE_PROXY_FIX = True
+    PREFERRED_URL_SCHEME = "https"
+    SESSION_COOKIE_SECURE = True
+    SESSION_COOKIE_HTTPONLY = True
 
 # ---------------------------------------------------------------------------
 # Optional components — keep off on a 2 vCPU / 4 GiB node unless needed

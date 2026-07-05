@@ -235,12 +235,162 @@ export the cluster credentials.
 
 ## 7. Expose the UI
 
+`my-values.yaml` configures `service.type: NodePort` with port `30088`.
+Caddy on the VM terminates HTTPS on 443 and reverse-proxies to `127.0.0.1:30088`.
+Port `30088` is intentionally **not** opened in ufw or the DigitalOcean Cloud Firewall.
+
+### a. DNS prerequisite (one-time)
+
+On your DNS provider, create an A record before configuring Caddy:
+
+| Type | Name | Value |
+|------|------|-------|
+| A | `superset` (or the subdomain you choose) | droplet public IPv4 |
+
+Verify propagation from your Mac:
+
 ```sh
-microk8s kubectl port-forward -n superset svc/superset 8088:8088
+dig +short superset.yourdomain.com
+# must return the droplet public IP before proceeding
 ```
 
-Open http://localhost:8088 in your browser.
-Default bootstrap credentials (chart default, change after first login): **admin / admin**.
+### b. Helm upgrade (apply NodePort service change)
+
+From the project root on the droplet (parent of `custom_config/`):
+
+```sh
+git pull origin master   # pull the updated my-values.yaml
+
+microk8s helm secrets upgrade --install superset superset/superset \
+  --version 0.17.2 \
+  -n superset \
+  -f custom_config/my-values.yaml \
+  -f custom_config/environments/dev/secrets.yaml \
+  --wait --timeout 15m
+```
+
+Confirm the NodePort is active:
+
+```sh
+microk8s kubectl get svc -n superset superset
+# Expected: TYPE=NodePort, PORT(S)=8088:30088/TCP
+
+curl -sS -o /dev/null -w "%{http_code}\n" http://127.0.0.1:30088/health
+# Expected: 200
+```
+
+### c. Install and configure Caddy
+
+```sh
+sudo apt update
+sudo apt install -y caddy
+
+# Back up default Caddyfile
+sudo cp /etc/caddy/Caddyfile /etc/caddy/Caddyfile.bak.$(date +%Y%m%d)
+```
+
+Edit `/etc/caddy/Caddyfile` (replace hostname with your real domain):
+
+```
+superset.yourdomain.com {
+    reverse_proxy 127.0.0.1:30088 {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+        transport http {
+            read_timeout 300s
+            write_timeout 300s
+        }
+    }
+}
+```
+
+Validate and reload:
+
+```sh
+sudo caddy validate --config /etc/caddy/Caddyfile
+sudo systemctl enable caddy
+sudo systemctl reload caddy
+sudo systemctl status caddy
+```
+
+Caddy obtains and renews Let's Encrypt TLS certificates automatically.
+Port 80 must be reachable from the internet for the ACME HTTP-01 challenge.
+
+### d. Firewall (ufw + DigitalOcean Cloud Firewall)
+
+**On the droplet (ufw):**
+
+```sh
+sudo ufw allow OpenSSH          # keep SSH open; restrict to admin IP if possible
+sudo ufw allow 80/tcp           # required for Let's Encrypt HTTP-01 renewal
+sudo ufw allow 443/tcp          # HTTPS public access
+
+# Do NOT run: sudo ufw allow 30088/tcp  — Caddy reaches it over loopback only
+# Do NOT run: sudo ufw deny 30088/tcp   — breaks Caddy → NodePort on loopback
+
+sudo ufw enable    # if not already enabled
+sudo ufw status numbered
+```
+
+**DigitalOcean Cloud Firewall** (Control Panel → Networking → Firewalls):
+
+| Inbound | Ports | Sources |
+|---------|-------|---------|
+| SSH | 22 | Your admin IP(s) only |
+| HTTP | 80 | 0.0.0.0/0, ::/0 |
+| HTTPS | 443 | 0.0.0.0/0, ::/0 (or restrict to 4 user IPs) |
+| — | 30088 | Do not add |
+
+Optional: restrict HTTPS to known user IPs for additional defense. Let's Encrypt renewal
+requires port 80 to remain open to `0.0.0.0/0`.
+
+### e. Validate end-to-end
+
+```sh
+# From the droplet — NodePort reachable locally
+curl -I http://127.0.0.1:30088/health
+
+# From the droplet — HTTPS via Caddy
+curl -sS -o /dev/null -w "%{http_code}\n" https://superset.yourdomain.com/health
+
+# From your Mac — 30088 must NOT be reachable publicly (should fail/timeout)
+curl -m 5 -I http://DROPLET_PUBLIC_IP:30088/health
+```
+
+From your Mac browser: `https://superset.yourdomain.com/login/`
+
+Default bootstrap credentials (chart default — **change immediately after first login**): **admin / admin**
+
+### f. Break-glass: SSH tunnel (no public exposure required)
+
+The SSH tunnel remains available as an admin fallback at any time:
+
+```sh
+ssh -L 8088:127.0.0.1:8088 USER@DROPLET_PUBLIC_IP \
+  'microk8s kubectl port-forward -n superset svc/superset 8088:8088'
+# then open http://localhost:8088
+```
+
+### g. Rollback to ClusterIP
+
+If you need to revert public access:
+
+```sh
+# In my-values.yaml, change service back to:
+#   type: ClusterIP
+#   port: 8088
+# (remove the nodePort block)
+
+microk8s helm secrets upgrade --install superset superset/superset \
+  --version 0.17.2 -n superset \
+  -f custom_config/my-values.yaml \
+  -f custom_config/environments/dev/secrets.yaml \
+  --wait --timeout 15m
+
+sudo systemctl stop caddy
+```
 
 ---
 
