@@ -251,6 +251,7 @@ Verify propagation from your Mac:
 
 ```sh
 dig +short superset.yourdomain.com
+dig +short dash.greenehillfood.coop
 # must return the droplet public IP before proceeding
 ```
 

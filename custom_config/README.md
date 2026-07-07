@@ -200,6 +200,8 @@ The `mysqlconnector` driver is installed by `bootstrapScript`. The `pymysql` shi
 
 ## Public access
 
+Ideal subdomain: dash.greenehillfood.coop
+
 The service is configured as `NodePort` on port `30088`. Caddy on the VM terminates
 HTTPS on port 443 and reverse-proxies to `127.0.0.1:30088`. Port `30088` is **not**
 opened in ufw or the DigitalOcean Cloud Firewall — it is loopback-only.
