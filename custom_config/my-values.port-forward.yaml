@@ -1,0 +1,339 @@
+# Apache Superset Helm overrides — ClusterIP / port-forward access (no public web server)
+# Chart: superset/superset 0.17.2, app 6.1.0
+#
+# This variant keeps the UI inside the Kubernetes cluster (service.type: ClusterIP).
+# Nothing is published on the droplet host — no NodePort, no nginx/Caddy required.
+# Access the UI only via kubectl port-forward or an SSH tunnel.
+#
+# Compare with my-values.yaml (NodePort + nginx/Caddy HTTPS on section 7 of INSTALL_microk8s.md).
+#
+# =============================================================================
+# PREREQUISITES (once per droplet)
+# =============================================================================
+#   microk8s helm repo add superset https://apache.github.io/superset
+#   microk8s helm repo update
+#   microk8s helm plugin install https://github.com/jkroepke/helm-secrets
+#   export SOPS_AGE_KEY_FILE=~/.config/sops/age/key.txt
+#   microk8s kubectl create namespace superset --dry-run=client -o yaml | microk8s kubectl apply -f -
+#
+# =============================================================================
+# 1. DEPLOY / UPGRADE (run from project root on the droplet)
+# =============================================================================
+#   cd ~/superset_config/superset_droplet   # parent of custom_config/
+#   git pull origin master                  # if using git
+#
+#   microk8s helm secrets upgrade --install superset superset/superset \
+#     --version 0.17.2 \
+#     -n superset \
+#     -f custom_config/my-values.port-forward.yaml \
+#     -f custom_config/environments/dev/secrets.yaml \
+#     --wait --timeout 15m
+#
+# =============================================================================
+# 2. VERIFY ON THE DROPLET (after helm upgrade)
+# =============================================================================
+#   # Cluster must be running
+#   sudo microk8s start
+#   microk8s status --wait-ready
+#
+#   # Service should be ClusterIP only (no :30088 NodePort)
+#   microk8s kubectl get svc -n superset superset
+#   # Expected: TYPE=ClusterIP, PORT(S)=8088/TCP
+#
+#   microk8s kubectl get pods -n superset
+#   # Expected: superset-* Running, postgresql-* Running, redis-* Running
+#
+#   # Confirm no host port 30088 is listening
+#   sudo ss -tlnp | grep 30088 || echo "port 30088 closed (good)"
+#
+#   # Quick health check via port-forward (on droplet — leave running in a terminal)
+#   microk8s kubectl port-forward -n superset svc/superset 8088:8088
+#   # In another droplet shell:
+#   curl -sS -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8088/health
+#   # Expected: 200
+#   # Then open http://127.0.0.1:8088/login/ on the droplet (or use SSH tunnel below)
+#
+# =============================================================================
+# 3. ACCESS FROM YOUR MAC (SSH tunnel)
+# =============================================================================
+#   ssh -L 8088:127.0.0.1:8088 USER@DROPLET_PUBLIC_IP \
+#     'microk8s kubectl port-forward -n superset svc/superset 8088:8088'
+#
+#   Then open in your browser: http://localhost:8088/login/
+#   Default bootstrap credentials (change after first login): admin / admin
+#
+# =============================================================================
+# 4. OPTIONAL HOST CLEANUP (if you previously used nginx/Caddy NodePort setup)
+# =============================================================================
+#   sudo rm -f /etc/nginx/sites-enabled/dash.greenehillfood.coop.conf
+#   sudo nginx -t && sudo systemctl reload nginx
+#   sudo systemctl disable --now caddy 2>/dev/null || true
+#
+# Secrets are NOT stored here. They are managed via SOPS + age.
+# See environments/dev/secrets.example.yaml and INSTALL_microk8s.md.
+
+image:
+  tag: "6.1.0"
+
+# ---------------------------------------------------------------------------
+# Metadata DB: PostgreSQL (chart-managed)
+# ---------------------------------------------------------------------------
+postgresql:
+  enabled: true
+  image:
+    registry: docker.io
+    repository: bitnamilegacy/postgresql
+    tag: "14.17.0-debian-12-r3"
+  auth:
+    username: superset
+    password: superset
+    database: superset
+  primary:
+    resources:
+      limits:
+        cpu: 500m
+        memory: 768Mi
+      requests:
+        cpu: 150m
+        memory: 384Mi
+    extendedConfiguration: |
+      shared_buffers = 64MB
+      effective_cache_size = 192MB
+      work_mem = 4MB
+      maintenance_work_mem = 32MB
+      max_connections = 50
+
+# ---------------------------------------------------------------------------
+# Cache / async results broker: Redis (chart-managed)
+# ---------------------------------------------------------------------------
+redis:
+  enabled: true
+  image:
+    registry: docker.io
+    repository: bitnamilegacy/redis
+    tag: "7.0.10-debian-11-r4"
+  master:
+    extraFlags:
+      - "--maxmemory"
+      - "256mb"
+      - "--maxmemory-policy"
+      - "allkeys-lru"
+    resources:
+      limits:
+        cpu: 200m
+        memory: 256Mi
+      requests:
+        cpu: 100m
+        memory: 192Mi
+
+# ---------------------------------------------------------------------------
+# Superset web (gunicorn)
+# ---------------------------------------------------------------------------
+supersetNode:
+  replicas:
+    enabled: true
+    replicaCount: 1
+  connections:
+    db_type: postgresql
+    db_host: "{{ .Release.Name }}-postgresql"
+    db_port: "5432"
+    db_user: superset
+    db_pass: superset
+    db_name: superset
+  command:
+    - "/bin/sh"
+    - "-c"
+    - ". {{ .Values.configMountPath }}/superset_bootstrap.sh; /usr/bin/run-server.sh"
+  initContainers:
+    - name: wait-for-postgres
+      image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+      imagePullPolicy: "{{ .Values.image.pullPolicy }}"
+      envFrom:
+        - secretRef:
+            name: "{{ tpl .Values.envFromSecret . }}"
+      command:
+        - /bin/bash
+        - -c
+        - |
+          SECONDS=0
+          until (exec 3<>/dev/tcp/"$DB_HOST"/"$DB_PORT") 2>/dev/null; do
+            if [ "$SECONDS" -ge 120 ]; then
+              echo "timeout waiting for postgres at $DB_HOST:$DB_PORT after 120s" >&2
+              exit 1
+            fi
+            echo "waiting for postgres at $DB_HOST:$DB_PORT (elapsed ${SECONDS}s)"
+            sleep 2
+          done
+          echo "postgres at $DB_HOST:$DB_PORT is up"
+      resources:
+        limits:
+          memory: 128Mi
+        requests:
+          cpu: 50m
+          memory: 64Mi
+  resources:
+    limits:
+      cpu: "1"
+      memory: 1280Mi
+    requests:
+      cpu: 300m
+      memory: 512Mi
+
+# ---------------------------------------------------------------------------
+# Celery worker
+# ---------------------------------------------------------------------------
+supersetWorker:
+  replicas:
+    enabled: true
+    replicaCount: 1
+  command:
+    - "/bin/sh"
+    - "-c"
+    - ". {{ .Values.configMountPath }}/superset_bootstrap.sh; celery --app=superset.tasks.celery_app:app worker --concurrency 1"
+  initContainers:
+    - name: wait-for-postgres-redis
+      image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+      imagePullPolicy: "{{ .Values.image.pullPolicy }}"
+      envFrom:
+        - secretRef:
+            name: "{{ tpl .Values.envFromSecret . }}"
+      command:
+        - /bin/bash
+        - -c
+        - |
+          SECONDS=0
+          wait_for() {
+            local host=$1 port=$2 name=$3
+            until (exec 3<>/dev/tcp/"$host"/"$port") 2>/dev/null; do
+              if [ "$SECONDS" -ge 120 ]; then
+                echo "timeout waiting for $name at $host:$port after 120s" >&2
+                exit 1
+              fi
+              echo "waiting for $name at $host:$port (elapsed ${SECONDS}s)"
+              sleep 2
+            done
+            echo "$name at $host:$port is up"
+          }
+          wait_for "$DB_HOST" "$DB_PORT" postgres
+          wait_for "$REDIS_HOST" "$REDIS_PORT" redis
+      resources:
+        limits:
+          memory: 128Mi
+        requests:
+          cpu: 50m
+          memory: 64Mi
+  resources:
+    limits:
+      cpu: 500m
+      memory: 768Mi
+    requests:
+      cpu: 150m
+      memory: 384Mi
+
+# ---------------------------------------------------------------------------
+# Init job (db migrations + admin creation)
+# ---------------------------------------------------------------------------
+init:
+  enabled: true
+  loadExamples: false
+  createAdmin: true
+  resources:
+    limits:
+      cpu: "1"
+      memory: 1536Mi
+    requests:
+      cpu: 100m
+      memory: 256Mi
+  initContainers:
+    - name: wait-for-postgres
+      image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+      imagePullPolicy: "{{ .Values.image.pullPolicy }}"
+      envFrom:
+        - secretRef:
+            name: "{{ tpl .Values.envFromSecret . }}"
+      command:
+        - /bin/bash
+        - -c
+        - |
+          SECONDS=0
+          until (exec 3<>/dev/tcp/"$DB_HOST"/"$DB_PORT") 2>/dev/null; do
+            if [ "$SECONDS" -ge 120 ]; then
+              echo "timeout waiting for postgres at $DB_HOST:$DB_PORT after 120s" >&2
+              exit 1
+            fi
+            echo "waiting for postgres at $DB_HOST:$DB_PORT (elapsed ${SECONDS}s)"
+            sleep 2
+          done
+          echo "postgres at $DB_HOST:$DB_PORT is up"
+      resources:
+        limits:
+          memory: 128Mi
+        requests:
+          cpu: 50m
+          memory: 64Mi
+
+# ---------------------------------------------------------------------------
+# Service
+# ---------------------------------------------------------------------------
+# ClusterIP keeps the UI inside the Kubernetes network only.
+# No host port is published — access via kubectl port-forward or SSH tunnel.
+service:
+  type: ClusterIP
+  port: 8088
+
+# ---------------------------------------------------------------------------
+# Bootstrap: install Python drivers absent from the Superset 6.1.0 image venv.
+# ---------------------------------------------------------------------------
+bootstrapScript: |
+  set -e
+  uv pip install --no-cache-dir \
+    "mysql-connector-python>=8.0.0,<9.0.0" \
+    "psycopg2-binary" \
+    "pymysql"
+  if [ ! -f ~/bootstrap ]; then echo "Running Superset with uid {{ .Values.runAsUser }}" > ~/bootstrap; fi
+
+# ---------------------------------------------------------------------------
+# Non-sensitive environment (source MySQL connection hints)
+# ---------------------------------------------------------------------------
+extraEnv:
+  SERVER_WORKER_AMOUNT: "1"
+  SERVER_THREADS_AMOUNT: "8"
+  SOURCE_MYSQL_HOST: "10.116.0.2"   # VM private IP — see README.md
+  SOURCE_MYSQL_PORT: "3306"
+  SOURCE_MYSQL_DATABASE: "membership_ard"
+
+# extraSecretEnv is injected from environments/dev/secrets.yaml (SOPS-encrypted):
+#   SUPERSET_SECRET_KEY, SOURCE_MYSQL_USER, SOURCE_MYSQL_PASSWORD
+
+# ---------------------------------------------------------------------------
+# Config overrides
+# ---------------------------------------------------------------------------
+configOverrides:
+  pymysql_as_mysqldb: |
+    try:
+      import pymysql
+      pymysql.install_as_MySQLdb()
+    except Exception:
+      pass
+  secret: |
+    SECRET_KEY = os.environ["SUPERSET_SECRET_KEY"]
+  source_mysql_uri_hint: |
+    # mysql+mysqlconnector://{SOURCE_MYSQL_USER}:{SOURCE_MYSQL_PASSWORD}@{SOURCE_MYSQL_HOST}:{SOURCE_MYSQL_PORT}/{SOURCE_MYSQL_DATABASE}
+  proxy_fix: |
+    # Cluster-only access via port-forward (HTTP). No reverse proxy on the host.
+    ENABLE_PROXY_FIX = False
+    PREFERRED_URL_SCHEME = "http"
+    SESSION_COOKIE_SECURE = False
+    SESSION_COOKIE_HTTPONLY = True
+
+# ---------------------------------------------------------------------------
+# Optional components — keep off on a 2 vCPU / 4 GiB node unless needed
+# ---------------------------------------------------------------------------
+supersetCeleryBeat:
+  enabled: false
+
+supersetCeleryFlower:
+  enabled: false
+
+supersetWebsockets:
+  enabled: false
