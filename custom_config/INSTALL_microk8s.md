@@ -361,6 +361,7 @@ curl -m 5 -I http://DROPLET_PUBLIC_IP:30088/health
 ```
 
 From your Mac browser: `https://superset.yourdomain.com/login/`
+`https://dash.greenehillfood.coop/login/`
 
 Default bootstrap credentials (chart default — **change immediately after first login**): **admin / admin**
 
