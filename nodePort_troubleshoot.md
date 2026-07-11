@@ -115,7 +115,7 @@ Then re-apply the loopback kube-proxy binding from Issue A and re-verify.
 
 ---
 
-## 4. Issue C — HTTPS `/health` returns 301 (current open issue)
+## 4. Issue C — HTTPS `/health` returns 301 (RESOLVED 2026-07-11)
 
 ### Symptom
 ```
@@ -126,6 +126,32 @@ Expected 200.
 
 ### Interpretation
 301 is **not** a TLS/nginx failure — TLS terminated and nginx routed the request; something issued a redirect. This is the current focus of diagnosis.
+
+### Root cause (confirmed)
+The nginx site `dash.greenehillfood.coop.conf` was mangled. The server block
+that Certbot turned into the `listen 443 ssl` (HTTPS) block still had the
+HTTP-redirect body `location / { return 301 https://$host$request_uri; }`, so
+every HTTPS request was redirected to the identical HTTPS URL → infinite 301
+loop (`Location: https://dash.greenehillfood.coop/health`, same URL). The real
+`proxy_pass http://127.0.0.1:30088` server block was entirely commented out, so
+nginx never proxied to Superset. Backend was healthy the whole time
+(`curl http://127.0.0.1:30088/health` → 200), matching the decision-table row
+"backend 200 / nginx 301 loop → fix nginx :443 server block".
+
+### Fix applied
+Rewrote the file into two clean blocks: port 80 = ACME challenge + HTTP→HTTPS
+redirect; port 443 = TLS termination + `proxy_pass` to the loopback NodePort
+with forwarded headers (see §5). Backup saved to
+`~/dash.greenehillfood.coop.conf.bak.<timestamp>`. Applied via
+`sudo tee` + `sudo nginx -t` + `sudo systemctl reload nginx`.
+
+### Verification (passing)
+```
+https://dash.greenehillfood.coop/health   → 200
+https://dash.greenehillfood.coop/login/   → 200
+https://dash.greenehillfood.coop/         → 302 → /superset/welcome/ (relative, no scheme downgrade)
+http://dash.greenehillfood.coop/health    → 301 → https, follows to 200
+```
 
 ### Most likely causes (in order)
 1. **Trailing-slash redirect** — `/health` → `/health/` (often benign).
@@ -210,9 +236,17 @@ a site fragment fed as the main config errors with
 
 ## 7. Current status / next action
 
-- Issue A (public 30088): fix identified (loopback kube-proxy binding); verify applied.
-- Issue B (nothing listening on 30088): resolve if `ss` is empty — start MicroK8s,
-  confirm NodePort service + Running pods, redeploy `my-values.yaml` if needed.
-- Issue C (301 on `/health`): **open**. Next step is `curl -I` / `curl -IL` to read
-  the `Location:` and `Server:` headers and compare nginx vs direct-NodePort
-  responses, then act per the decision tables above.
+- Issue C (301 loop on `/health`): **RESOLVED 2026-07-11** — nginx site rewritten so
+  the `:443` block proxies to `127.0.0.1:30088` (was stuck in a self-redirect loop
+  with the proxy block commented out). HTTPS `/health` and `/login/` now return 200.
+- Issue B (nothing listening on 30088): **not present** — backend healthy
+  (`curl http://127.0.0.1:30088/health` → 200). Note: `ss -tlnp | grep 30088` shows
+  nothing because MicroK8s kube-proxy runs in **iptables mode** (NodePort handled by
+  NAT rules, no listening socket). "Connection refused" (not empty `ss`) is the real
+  fault signal for Issue B; empty `ss` alone is expected here.
+- Issue A (public 30088 exposure): **still open / unverified**. Could not confirm the
+  kube-proxy `--nodeport-addresses=127.0.0.1/32` binding (needs
+  `sudo` edit of `/var/snap/microk8s/current/args/kube-proxy` + `microk8s stop/start`,
+  which requires config-change approval). From the droplet, verify whether
+  `http://67.207.80.236:30088/health` is reachable off-host and close it via the
+  kube-proxy arg (not ufw) if so.
